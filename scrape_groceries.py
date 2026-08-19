@@ -26,13 +26,20 @@ def run_scraper_and_update_db():
             category TEXT,
             store_name TEXT NOT NULL,
             price NUMERIC(10, 2) NOT NULL,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT unique_store_item UNIQUE (product_name, store_name)
         );
     """)
 
+    # UPSERT Logic: Updates existing rows on conflict instead of failing
     insert_query = """
         INSERT INTO grocery_products (product_name, category, store_name, price)
-        VALUES %s;
+        VALUES %s
+        ON CONFLICT (product_name, store_name) 
+        DO UPDATE SET 
+            price = EXCLUDED.price,
+            category = EXCLUDED.category,
+            updated_at = CURRENT_TIMESTAMP;
     """
     execute_values(cursor, insert_query, scraped_products)
     
