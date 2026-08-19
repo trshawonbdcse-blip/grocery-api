@@ -29,7 +29,12 @@ jobs:
           pip install playwright
           playwright install --with-deps chromium
 
-      - name: Run Live Web Scraper
+      - name: Run Rimi Scraper
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python grocery_scraper.py
+
+      - name: Run Prisma Scraper
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python scrape_prisma.py
