@@ -22,14 +22,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libpq-dev build-essential
 
-      - name: Install Dependencies & Playwright
+      - name: Install Python & Playwright Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install playwright
           playwright install --with-deps chromium
 
-      - name: Run Live Scraper
+      - name: Run Live Web Scraper
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python grocery_scraper.py
