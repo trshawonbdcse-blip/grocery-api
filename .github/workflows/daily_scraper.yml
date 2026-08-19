@@ -17,12 +17,19 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Dependencies
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev build-essential
+
+      - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install playwright
+          playwright install --with-deps chromium
 
-      - name: Run Scraper Script
+      - name: Run Real Scraper Script
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: python scrape_groceries.py
+        run: python grocery_scraper.py
