@@ -31,7 +31,7 @@ def run_scraper_and_update_db():
         );
     """)
 
-    # UPSERT Logic: Updates existing rows on conflict instead of failing
+    # ON CONFLICT DO UPDATE handles duplicate items safely
     insert_query = """
         INSERT INTO grocery_products (product_name, category, store_name, price)
         VALUES %s
