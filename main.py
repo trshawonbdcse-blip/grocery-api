@@ -16,7 +16,7 @@ from transport_service import router as transport_router
 app = FastAPI(
     title="Tallinn Grocery, Beauty & Transport API",
     description="Unified API for grocery price comparison, beauty deals, and live Tallinn public transport tracking.",
-    version="1.7.0",
+    version="1.8.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -542,7 +542,48 @@ def get_beauty_stats():
             {
                 "store": r["store_name"],
                 "total_items": r["count"],
-                "last_scraped": str(r["max"])
+                "last_scraped": str(r["max"]) if r["max"] else "N/A"
+            }
+            for r in rows
+        ]
+    }
+
+
+@app.get(
+    "/grocery-products/stats",
+    summary="Get Grocery Database Scrape Statistics",
+    tags=["Grocery Search"],
+)
+def get_grocery_stats():
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT store_name, COUNT(*), MAX(created_at)
+            FROM grocery_products
+            GROUP BY store_name
+            ORDER BY COUNT(*) DESC;
+        """)
+        rows = cursor.fetchall()
+    except Exception:
+        conn.rollback()
+        cursor.execute("""
+            SELECT store_name, COUNT(*)
+            FROM grocery_products
+            GROUP BY store_name
+            ORDER BY COUNT(*) DESC;
+        """)
+        rows = [{"store_name": r["store_name"], "count": r["count"], "max": None} for r in cursor.fetchall()]
+
+    cursor.close()
+    conn.close()
+
+    return {
+        "stores": [
+            {
+                "store": r["store_name"],
+                "total_items": r["count"],
+                "last_scraped": str(r["max"]) if r.get("max") else "Active"
             }
             for r in rows
         ]
@@ -623,6 +664,7 @@ def visual_status_dashboard():
             .card { background-color: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 20px; display: flex; flex-direction: column; justify-content: space-between; }
             .store-name { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
             .category-tag { font-size: 11px; text-transform: uppercase; color: #38bdf8; letter-spacing: 0.5px; font-weight: 700; margin-bottom: 8px; }
+            .stat-line { font-size: 13px; color: #94a3b8; margin-top: 4px; }
             .status-badge { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; padding: 4px 12px; border-radius: 20px; width: fit-content; margin-top: 12px; }
             .dot { width: 10px; height: 10px; border-radius: 50%; }
             .green { background-color: #052e16; color: #4ade80; border: 1px solid #166534; }
@@ -666,8 +708,23 @@ def visual_status_dashboard():
                 const groceryContainer = document.getElementById('grocery-container');
                 const beautyContainer = document.getElementById('beauty-container');
                 try {
-                    const res = await fetch('/stores/health');
-                    const data = await res.json();
+                    const [healthRes, beautyStatsRes, groceryStatsRes] = await Promise.all([
+                        fetch('/stores/health'),
+                        fetch('/beauty-products/stats'),
+                        fetch('/grocery-products/stats')
+                    ]);
+
+                    const data = await healthRes.json();
+                    const beautyStats = await beautyStatsRes.json();
+                    const groceryStats = await groceryStatsRes.json();
+
+                    const dbMap = {};
+                    if (beautyStats.stores) {
+                        beautyStats.stores.forEach(s => { dbMap[s.store.toLowerCase()] = s; });
+                    }
+                    if (groceryStats.stores) {
+                        groceryStats.stores.forEach(s => { dbMap[s.store.toLowerCase()] = s; });
+                    }
                     
                     groceryContainer.innerHTML = '';
                     beautyContainer.innerHTML = '';
@@ -678,11 +735,22 @@ def visual_status_dashboard():
                         
                         let badgeClass = item.badge_color === 'green' ? 'green' : (item.badge_color === 'orange' ? 'orange' : 'red');
                         
+                        let dbStatsHtml = '';
+                        const matched = dbMap[item.store.toLowerCase()];
+                        if (matched) {
+                            dbStatsHtml = `
+                                <div class="stat-line">📦 DB Items: <strong>${matched.total_items}</strong></div>
+                            `;
+                        } else {
+                            dbStatsHtml = `<div class="stat-line">📦 DB Items: <strong>0</strong></div>`;
+                        }
+
                         card.innerHTML = `
                             <div>
                                 <div class="category-tag">${item.category}</div>
                                 <div class="store-name">${item.store}</div>
                                 <a href="${item.target_url}" target="_blank" class="url-link">${item.target_url}</a>
+                                ${dbStatsHtml}
                             </div>
                             <div class="status-badge ${badgeClass}">
                                 <span class="dot"></span>
