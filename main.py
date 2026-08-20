@@ -16,7 +16,7 @@ from transport_service import router as transport_router
 app = FastAPI(
     title="Tallinn Grocery, Beauty & Transport API",
     description="Unified API for grocery price comparison, beauty deals, and live Tallinn public transport tracking.",
-    version="1.6.1",
+    version="1.6.2",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -107,7 +107,6 @@ def check_url_status(url: str) -> dict:
                     "badge_color": "green"
                 }
             elif res.status_code in [403, 429]:
-                # Cloudflare / Bot Protection active, but server is online
                 return {
                     "is_online": True, 
                     "status_code": res.status_code, 
@@ -454,7 +453,6 @@ def search_beauty_products(
         ]
         return {"source": "database", "count": len(products), "products": products}
 
-    # Fallback to live search if database yields 0 items
     fallback_items = live_search_fallback(q)
     return {
         "source": "live_fallback",
