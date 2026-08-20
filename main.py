@@ -15,7 +15,7 @@ from transport_service import router as transport_router
 app = FastAPI(
     title="Tallinn Grocery, Beauty & Transport API",
     description="Unified API for grocery price comparison, beauty deals, and live Tallinn public transport tracking.",
-    version="1.6.0",
+    version="1.6.1",
     docs_url="/docs",
     redoc_url="/redoc",
 )
