@@ -5,6 +5,7 @@ import httpx
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -222,7 +223,7 @@ def root():
     return {
         "status": "online",
         "service": "Tallinn Grocery, Beauty & Transport Backend",
-        "swagger_docs": "http://127.0.0.1:8000/docs",
+        "swagger_docs": "https://grocery-api-p313.onrender.com/docs",
     }
 
 
@@ -587,6 +588,98 @@ def check_stores_health():
         })
         
     return {"stores_health": results}
+
+
+# --- VISUAL SOURCE HEALTH DASHBOARD ---
+@app.get("/status-dashboard", response_class=HTMLResponse, tags=["Link Health Checker"])
+def visual_status_dashboard():
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Tallinn API Source Monitor</title>
+        <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; color: #f8fafc; margin: 0; padding: 40px 20px; }
+            .container { max-width: 900px; margin: 0 auto; }
+            .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; border-bottom: 1px solid #334155; padding-bottom: 20px; }
+            h1 { margin: 0; font-size: 24px; color: #38bdf8; }
+            .refresh-btn { background: #1e293b; color: #f8fafc; border: 1px solid #475569; padding: 8px 16px; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
+            .refresh-btn:hover { background: #334155; }
+            .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+            .card { background-color: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 20px; display: flex; flex-direction: column; justify-content: space-between; }
+            .store-name { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+            .status-badge { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; padding: 4px 12px; border-radius: 20px; width: fit-content; margin-top: 12px; }
+            .dot { width: 10px; height: 10px; border-radius: 50%; }
+            .green { background-color: #052e16; color: #4ade80; border: 1px solid #166534; }
+            .green .dot { background-color: #22c55e; box-shadow: 0 0 8px #22c55e; }
+            .red { background-color: #450a0a; color: #f87171; border: 1px solid #991b1b; }
+            .red .dot { background-color: #ef4444; box-shadow: 0 0 8px #ef4444; }
+            .orange { background-color: #451a03; color: #fb923c; border: 1px solid #9a3412; }
+            .orange .dot { background-color: #f97316; box-shadow: 0 0 8px #f97316; }
+            .url-link { color: #94a3b8; font-size: 12px; text-decoration: none; word-break: break-all; margin-top: 8px; }
+            .url-link:hover { color: #38bdf8; text-decoration: underline; }
+            .footer { margin-top: 40px; text-align: center; color: #64748b; font-size: 13px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <div>
+                    <h1>Live Scraper Source Health</h1>
+                    <p style="color: #94a3b8; margin: 4px 0 0 0; font-size: 14px;">Tallinn Grocery, Beauty & Transport Data Sources</p>
+                </div>
+                <button class="refresh-btn" onclick="fetchHealthData()">↻ Refresh Status</button>
+            </div>
+            
+            <div id="cards-container" class="grid">
+                <div style="color: #94a3b8;">Checking live sources...</div>
+            </div>
+
+            <div class="footer">
+                Auto-refreshes every 30 seconds • Powered by FastAPI Health Check Engine
+            </div>
+        </div>
+
+        <script>
+            async function fetchHealthData() {
+                const container = document.getElementById('cards-container');
+                try {
+                    const res = await fetch('/beauty-products/store-health');
+                    const data = await res.json();
+                    
+                    container.innerHTML = '';
+                    data.stores_health.forEach(item => {
+                        const card = document.createElement('div');
+                        card.className = 'card';
+                        
+                        let badgeClass = item.badge_color === 'green' ? 'green' : (item.badge_color === 'orange' ? 'orange' : 'red');
+                        
+                        card.innerHTML = `
+                            <div>
+                                <div class="store-name">${item.store}</div>
+                                <a href="${item.target_url}" target="_blank" class="url-link">${item.target_url}</a>
+                            </div>
+                            <div class="status-badge ${badgeClass}">
+                                <span class="dot"></span>
+                                ${item.status_label} (${item.status_code})
+                            </div>
+                        `;
+                        container.appendChild(card);
+                    });
+                } catch (e) {
+                    container.innerHTML = '<div style="color: #f87171;">Failed to load source statuses.</div>';
+                }
+            }
+
+            fetchHealthData();
+            setInterval(fetchHealthData, 30000);
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content, status_code=200)
 
 
 if __name__ == "__main__":
