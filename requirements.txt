@@ -17,4 +17,4 @@ click==8.4.2
 h11==0.16.0
 idna==3.19
 soupsieve==2.9.2
-urllib3==2.7.0
+urllib3==2.7.0httpx
