@@ -1,5 +1,8 @@
 import os
+import re
 from typing import List, Optional
+import httpx
+from bs4 import BeautifulSoup
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -12,7 +15,7 @@ from transport_service import router as transport_router
 app = FastAPI(
     title="Tallinn Grocery, Beauty & Transport API",
     description="Unified API for grocery price comparison, beauty deals, and live Tallinn public transport tracking.",
-    version="1.4.0",
+    version="1.6.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -43,6 +46,143 @@ def get_db():
         raise HTTPException(
             status_code=500, detail=f"Database connection failed: {str(e)}"
         )
+
+
+# --- HELPER CATEGORIZER FOR LIVE FALLBACK ---
+def categorize_title(title: str, url: str) -> str:
+    text = f"{title} {url}".lower()
+
+    if any(k in text for k in ["parfüm", "perfume", "parfum", "eau de", "edt", "edp", "cologne", "lõhn"]):
+        return "Perfume"
+    elif any(k in text for k in ["huule", "mascara", "ripsme", "jumestus", "foundation", "lipstick", "makeup", "puder", "põsepuna", "laovärv"]):
+        return "Makeup"
+    elif any(k in text for k in ["šampoon", "shampoo", "palsam", "conditioner", "juukse", "hair", "mask", "õli"]):
+        return "Hair care"
+    elif any(k in text for k in ["näo", "facial", "face", "kreem", "cream", "seerum", "serum", "toonik", "puhastus", "cleanser"]):
+        return "Facial care"
+    elif any(k in text for k in ["keha", "body", "duši", "shower", "lotion", "seep", "scrub", "koorija"]):
+        return "Body care"
+    elif any(k in text for k in ["hamba", "oral", "tooth", "paste", "hari", "brush", "suuvesi"]):
+        return "Oral care"
+    elif any(k in text for k in ["laps", "beebi", "baby", "child", "mother"]):
+        return "Mother and child"
+    elif any(k in text for k in ["meeste", "men", "for men", "habeme", "shave"]):
+        return "For men"
+    elif any(k in text for k in ["päike", "sun", "spf", "päevitus"]):
+        return "Sun"
+    elif any(k in text for k in ["seade", "sirgendaja", "kuivati", "dryer", "trimmer", "epilaator"]):
+        return "Electrical equipment"
+    elif any(k in text for k in ["derma", "apteek", "pharmacy", "sensitive"]):
+        return "Dermacosmetics"
+    elif any(k in text for k in ["luxury", "luksus", "exclusive"]):
+        return "Luxury"
+    
+    return "Facial care"
+
+
+# --- LINK & SOURCE HEALTH CHECKER ---
+def check_url_status(url: str) -> dict:
+    if not url or not url.startswith("http"):
+        return {
+            "is_online": False, 
+            "status_code": 0, 
+            "status_label": "Invalid URL", 
+            "badge_color": "red"
+        }
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    }
+    try:
+        with httpx.Client(follow_redirects=True, timeout=6.0) as client:
+            res = client.get(url, headers=headers)
+                
+            if res.status_code == 200:
+                return {
+                    "is_online": True, 
+                    "status_code": res.status_code, 
+                    "status_label": "Online", 
+                    "badge_color": "green"
+                }
+            elif res.status_code in [403, 429]:
+                # Cloudflare / Bot Protection active, but server is online
+                return {
+                    "is_online": True, 
+                    "status_code": res.status_code, 
+                    "status_label": "Online (Protected)", 
+                    "badge_color": "green"
+                }
+            elif res.status_code in [404, 410]:
+                return {
+                    "is_online": False, 
+                    "status_code": res.status_code, 
+                    "status_label": "Broken Link (404)", 
+                    "badge_color": "red"
+                }
+            else:
+                return {
+                    "is_online": False, 
+                    "status_code": res.status_code, 
+                    "status_label": f"Warning ({res.status_code})", 
+                    "badge_color": "orange"
+                }
+    except httpx.TimeoutException:
+        return {
+            "is_online": False, 
+            "status_code": 408, 
+            "status_label": "Timeout", 
+            "badge_color": "red"
+        }
+    except Exception:
+        return {
+            "is_online": False, 
+            "status_code": 500, 
+            "status_label": "Unreachable", 
+            "badge_color": "red"
+        }
+
+
+# --- LIVE SCRAPE FALLBACK ENGINE ---
+def live_search_fallback(query: str):
+    results = []
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+    
+    try:
+        with httpx.Client(follow_redirects=True, timeout=5.0) as client:
+            res = client.get(f"https://www.notino.ee/search.asp?exs=1&q={query}", headers=headers)
+            if res.status_code == 200:
+                soup = BeautifulSoup(res.text, "html.parser")
+                for card in soup.select("a[data-testid='product-card']")[:5]:
+                    title_el = card.select_one("h3, strong")
+                    price_el = card.select_one("span[data-testid='product-price']")
+                    href = card.get("href", "")
+                    img_el = card.select_one("img")
+                    
+                    if title_el and price_el:
+                        title = title_el.get_text(strip=True)
+                        price_match = re.search(r"(\d+[\.,]\d{2})", price_el.get_text())
+                        price_val = float(price_match.group(1).replace(",", ".")) if price_match else 0.0
+                        img = img_el.get("src", "") if img_el else ""
+                        
+                        full_url = href if href.startswith("http") else f"https://www.notino.ee{href}"
+                        results.append({
+                            "id": 0,
+                            "title": title,
+                            "category": categorize_title(title, href),
+                            "store_name": "Notino",
+                            "current_price": price_val,
+                            "original_price": price_val,
+                            "discount_percentage": 0,
+                            "image_url": img,
+                            "product_url": full_url,
+                            "scraped_at": "Live External Search",
+                            "is_fallback": True
+                        })
+    except Exception as e:
+        print(f"⚠️ Live fallback search exception: {e}")
+
+    return results
 
 
 # --- SCHEMAS ---
@@ -263,6 +403,66 @@ def get_beauty_categories():
 
 
 @app.get(
+    "/beauty-products/search",
+    summary="Search DB First with Live Fallback",
+    tags=["Beauty Deals"],
+)
+def search_beauty_products(
+    q: str = Query(..., min_length=2, description="Product search term"),
+    category: Optional[str] = Query(None, description="Optional category filter")
+):
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    where_clauses = ["(title ILIKE %s OR store_name ILIKE %s)"]
+    params = [f"%{q}%", f"%{q}%"]
+
+    if category and category.lower() != "all":
+        where_clauses.append("category ILIKE %s")
+        params.append(f"%{category}%")
+
+    query_str = f"""
+        SELECT id, title, category, store_name, current_price, original_price, discount_percentage, image_url, product_url, scraped_at
+        FROM beauty_products
+        WHERE {' AND '.join(where_clauses)}
+        ORDER BY discount_percentage DESC, current_price ASC 
+        LIMIT 50;
+    """
+
+    cursor.execute(query_str, params)
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    if rows:
+        products = [
+            {
+                "id": r["id"],
+                "title": r["title"],
+                "category": r["category"],
+                "store_name": r["store_name"],
+                "current_price": float(r["current_price"]) if r["current_price"] else 0.0,
+                "original_price": float(r["original_price"]) if r["original_price"] else 0.0,
+                "discount_percentage": r["discount_percentage"],
+                "image_url": r["image_url"],
+                "product_url": r["product_url"],
+                "scraped_at": str(r["scraped_at"]),
+                "is_fallback": False
+            }
+            for r in rows
+        ]
+        return {"source": "database", "count": len(products), "products": products}
+
+    # Fallback to live search if database yields 0 items
+    fallback_items = live_search_fallback(q)
+    return {
+        "source": "live_fallback",
+        "count": len(fallback_items),
+        "products": fallback_items
+    }
+
+
+@app.get(
     "/beauty-products",
     summary="Get Discounted Beauty Products",
     tags=["Beauty Deals"],
@@ -348,6 +548,45 @@ def get_beauty_stats():
             for r in rows
         ]
     }
+
+
+# --- LINK & SOURCE HEALTH ENDPOINTS ---
+@app.get(
+    "/beauty-products/check-link",
+    summary="Check Single Product Link Status",
+    tags=["Link Health Checker"],
+)
+def check_single_link(url: str = Query(..., description="Product URL to test")):
+    return check_url_status(url)
+
+
+@app.get(
+    "/beauty-products/store-health",
+    summary="Get Target Store Websites Health Status",
+    tags=["Link Health Checker"],
+)
+def check_stores_health():
+    stores_to_check = {
+        "Loverte": "https://www.loverte.com/et/eripakkumised",
+        "MyLook": "https://www.mylook.ee/campaign",
+        "Notino": "https://www.notino.ee/special-promo/",
+        "IdeaalKosmeetika": "https://www.ideaalkosmeetika.ee/tooted-e-pood/",
+        "Tradehouse": "https://tradehouse.ee/campaigns/summerhits"
+    }
+    
+    results = []
+    for store, target_url in stores_to_check.items():
+        status = check_url_status(target_url)
+        results.append({
+            "store": store,
+            "target_url": target_url,
+            "is_online": status["is_online"],
+            "status_code": status["status_code"],
+            "status_label": status["status_label"],
+            "badge_color": status["badge_color"]
+        })
+        
+    return {"stores_health": results}
 
 
 if __name__ == "__main__":
