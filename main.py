@@ -16,7 +16,7 @@ from transport_service import router as transport_router
 app = FastAPI(
     title="Tallinn Grocery, Beauty & Transport API",
     description="Unified API for grocery price comparison, beauty deals, and live Tallinn public transport tracking.",
-    version="1.6.2",
+    version="1.7.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -560,25 +560,32 @@ def check_single_link(url: str = Query(..., description="Product URL to test")):
 
 
 @app.get(
-    "/beauty-products/store-health",
-    summary="Get Target Store Websites Health Status",
+    "/stores/health",
+    summary="Get Target Store Websites Health Status (Grocery & Beauty)",
     tags=["Link Health Checker"],
 )
-def check_stores_health():
+def check_all_stores_health():
     stores_to_check = {
-        "Loverte": "https://www.loverte.com/et/eripakkumised",
-        "MyLook": "https://www.mylook.ee/campaign",
-        "Notino": "https://www.notino.ee/special-promo/",
-        "IdeaalKosmeetika": "https://www.ideaalkosmeetika.ee/tooted-e-pood/",
-        "Tradehouse": "https://tradehouse.ee/campaigns/summerhits"
+        # Grocery Supermarkets
+        "Prisma EE": {"url": "https://www.prismamarket.ee", "type": "Grocery"},
+        "Rimi Baltic": {"url": "https://www.rimi.ee/e-pood", "type": "Grocery"},
+        "Selver": {"url": "https://www.selver.ee", "type": "Grocery"},
+        "Maxima EE": {"url": "https://www.barbora.ee", "type": "Grocery"},
+        # Beauty Stores
+        "Loverte": {"url": "https://www.loverte.com/et/eripakkumised", "type": "Beauty"},
+        "MyLook": {"url": "https://www.mylook.ee/campaign", "type": "Beauty"},
+        "Notino": {"url": "https://www.notino.ee/special-promo/", "type": "Beauty"},
+        "IdeaalKosmeetika": {"url": "https://www.ideaalkosmeetika.ee/tooted-e-pood/", "type": "Beauty"},
+        "Tradehouse": {"url": "https://tradehouse.ee/campaigns/summerhits", "type": "Beauty"}
     }
     
     results = []
-    for store, target_url in stores_to_check.items():
-        status = check_url_status(target_url)
+    for store, info in stores_to_check.items():
+        status = check_url_status(info["url"])
         results.append({
             "store": store,
-            "target_url": target_url,
+            "category": info["type"],
+            "target_url": info["url"],
             "is_online": status["is_online"],
             "status_code": status["status_code"],
             "status_label": status["status_label"],
@@ -586,6 +593,12 @@ def check_stores_health():
         })
         
     return {"stores_health": results}
+
+
+# Backward compatibility alias
+@app.get("/beauty-products/store-health", include_in_schema=False)
+def check_beauty_stores_health():
+    return check_all_stores_health()
 
 
 # --- VISUAL SOURCE HEALTH DASHBOARD ---
@@ -600,14 +613,16 @@ def visual_status_dashboard():
         <title>Tallinn API Source Monitor</title>
         <style>
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; color: #f8fafc; margin: 0; padding: 40px 20px; }
-            .container { max-width: 900px; margin: 0 auto; }
+            .container { max-width: 1000px; margin: 0 auto; }
             .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; border-bottom: 1px solid #334155; padding-bottom: 20px; }
             h1 { margin: 0; font-size: 24px; color: #38bdf8; }
             .refresh-btn { background: #1e293b; color: #f8fafc; border: 1px solid #475569; padding: 8px 16px; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
             .refresh-btn:hover { background: #334155; }
-            .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+            .section-title { font-size: 18px; font-weight: 600; color: #e2e8f0; margin: 24px 0 12px 0; display: flex; align-items: center; gap: 8px; }
+            .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
             .card { background-color: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 20px; display: flex; flex-direction: column; justify-content: space-between; }
-            .store-name { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+            .store-name { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+            .category-tag { font-size: 11px; text-transform: uppercase; color: #38bdf8; letter-spacing: 0.5px; font-weight: 700; margin-bottom: 8px; }
             .status-badge { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; padding: 4px 12px; border-radius: 20px; width: fit-content; margin-top: 12px; }
             .dot { width: 10px; height: 10px; border-radius: 50%; }
             .green { background-color: #052e16; color: #4ade80; border: 1px solid #166534; }
@@ -616,7 +631,7 @@ def visual_status_dashboard():
             .red .dot { background-color: #ef4444; box-shadow: 0 0 8px #ef4444; }
             .orange { background-color: #451a03; color: #fb923c; border: 1px solid #9a3412; }
             .orange .dot { background-color: #f97316; box-shadow: 0 0 8px #f97316; }
-            .url-link { color: #94a3b8; font-size: 12px; text-decoration: none; word-break: break-all; margin-top: 8px; }
+            .url-link { color: #94a3b8; font-size: 12px; text-decoration: none; word-break: break-all; margin-top: 4px; }
             .url-link:hover { color: #38bdf8; text-decoration: underline; }
             .footer { margin-top: 40px; text-align: center; color: #64748b; font-size: 13px; }
         </style>
@@ -631,23 +646,32 @@ def visual_status_dashboard():
                 <button class="refresh-btn" onclick="fetchHealthData()">↻ Refresh Status</button>
             </div>
             
-            <div id="cards-container" class="grid">
-                <div style="color: #94a3b8;">Checking live sources...</div>
+            <div class="section-title">🛒 Grocery Supermarkets</div>
+            <div id="grocery-container" class="grid">
+                <div style="color: #94a3b8;">Checking grocery stores...</div>
+            </div>
+
+            <div class="section-title">💄 Beauty & Cosmetics Stores</div>
+            <div id="beauty-container" class="grid">
+                <div style="color: #94a3b8;">Checking beauty stores...</div>
             </div>
 
             <div class="footer">
-                Auto-refreshes every 30 seconds • Powered by FastAPI Health Check Engine
+                Auto-refreshes every 30 seconds • Powered by Tallinn Unified Health Check Engine
             </div>
         </div>
 
         <script>
             async function fetchHealthData() {
-                const container = document.getElementById('cards-container');
+                const groceryContainer = document.getElementById('grocery-container');
+                const beautyContainer = document.getElementById('beauty-container');
                 try {
-                    const res = await fetch('/beauty-products/store-health');
+                    const res = await fetch('/stores/health');
                     const data = await res.json();
                     
-                    container.innerHTML = '';
+                    groceryContainer.innerHTML = '';
+                    beautyContainer.innerHTML = '';
+
                     data.stores_health.forEach(item => {
                         const card = document.createElement('div');
                         card.className = 'card';
@@ -656,6 +680,7 @@ def visual_status_dashboard():
                         
                         card.innerHTML = `
                             <div>
+                                <div class="category-tag">${item.category}</div>
                                 <div class="store-name">${item.store}</div>
                                 <a href="${item.target_url}" target="_blank" class="url-link">${item.target_url}</a>
                             </div>
@@ -664,10 +689,16 @@ def visual_status_dashboard():
                                 ${item.status_label} (${item.status_code})
                             </div>
                         `;
-                        container.appendChild(card);
+
+                        if (item.category === 'Grocery') {
+                            groceryContainer.appendChild(card);
+                        } else {
+                            beautyContainer.appendChild(card);
+                        }
                     });
                 } catch (e) {
-                    container.innerHTML = '<div style="color: #f87171;">Failed to load source statuses.</div>';
+                    groceryContainer.innerHTML = '<div style="color: #f87171;">Failed to load store status.</div>';
+                    beautyContainer.innerHTML = '';
                 }
             }
 
