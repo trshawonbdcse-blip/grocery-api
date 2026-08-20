@@ -568,7 +568,7 @@ def check_all_stores_health():
     stores_to_check = {
         # Grocery Supermarkets
         "Prisma EE": {"url": "https://www.prismamarket.ee", "type": "Grocery"},
-        "Rimi Baltic": {"url": "https://www.rimi.ee/e-pood", "type": "Grocery"},
+        "Rimi Baltic": {"url": "https://www.rimi.ee/epood/ee", "type": "Grocery"},
         "Selver": {"url": "https://www.selver.ee", "type": "Grocery"},
         "Maxima EE": {"url": "https://www.barbora.ee", "type": "Grocery"},
         # Beauty Stores
