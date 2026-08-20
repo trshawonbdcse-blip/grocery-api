@@ -10,14 +10,14 @@ from psycopg2.extras import RealDictCursor
 from transport_service import router as transport_router
 
 app = FastAPI(
-    title="Tallinn Grocery & Transport API",
-    description="Unified API for grocery price comparison and live Tallinn public transport tracking.",
-    version="1.1.0",
+    title="Tallinn Grocery, Beauty & Transport API",
+    description="Unified API for grocery price comparison, beauty deals, and live Tallinn public transport tracking.",
+    version="1.4.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
 
-# Allow cross-origin requests for browser interactivity in Swagger UI
+# Allow cross-origin requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -52,16 +52,13 @@ class SuggestionItem(BaseModel):
     price_formatted: str = Field(..., examples=["€0.79"])
     store: str = Field(..., examples=["Maxima EE"])
 
-
 class AutocompleteResponse(BaseModel):
     query: str = Field(..., examples=["piim"])
     category_filter: Optional[str] = Field(None, examples=["Dairy & Eggs"])
     suggestions: List[SuggestionItem]
 
-
 class BasketRequest(BaseModel):
     items: List[str] = Field(..., examples=[["Egg", "Milk", "Bread"]])
-
 
 class StoreTotal(BaseModel):
     store_name: str = Field(..., examples=["Maxima EE"])
@@ -69,12 +66,10 @@ class StoreTotal(BaseModel):
     tier_tag: str = Field(..., examples=["Best"])
     tag_color: str = Field(..., examples=["green"])
 
-
 class StrategyBanner(BaseModel):
     cheapest_store: str = Field(..., examples=["Maxima EE"])
     total_formatted: str = Field(..., examples=["€2.38"])
     savings_formatted: str = Field(..., examples=["Saved €0.82 vs Selver!"])
-
 
 class BasketComparisonResponse(BaseModel):
     best_basket_strategy: StrategyBanner
@@ -86,7 +81,7 @@ class BasketComparisonResponse(BaseModel):
 def root():
     return {
         "status": "online",
-        "service": "Tallinn Grocery & Transport Backend",
+        "service": "Tallinn Grocery, Beauty & Transport Backend",
         "swagger_docs": "http://127.0.0.1:8000/docs",
     }
 
@@ -97,7 +92,7 @@ def root():
     summary="Get Grocery Categories",
     tags=["Grocery Search"],
 )
-def get_categories():
+def get_grocery_categories():
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute(
@@ -246,6 +241,112 @@ def compare_basket(request: BasketRequest):
             "savings_formatted": f"Saved €{savings:.2f} vs {priciest_name}!",
         },
         "single_store_totals": rankings,
+    }
+
+
+# --- BEAUTY ENDPOINTS ---
+@app.get(
+    "/beauty-products/categories",
+    summary="Get Beauty Categories",
+    tags=["Beauty Deals"],
+)
+def get_beauty_categories():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT DISTINCT category FROM beauty_products WHERE category IS NOT NULL AND category != '' ORDER BY category ASC;"
+    )
+    categories = [r["category"] for r in cursor.fetchall()]
+    cursor.close()
+    conn.close()
+    return {"categories": categories}
+
+
+@app.get(
+    "/beauty-products",
+    summary="Get Discounted Beauty Products",
+    tags=["Beauty Deals"],
+)
+def get_beauty_products(
+    limit: int = 50, 
+    store: Optional[str] = None, 
+    category: Optional[str] = None
+):
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    where_clauses = []
+    params = []
+
+    if store:
+        where_clauses.append("store_name ILIKE %s")
+        params.append(f"%{store}%")
+
+    if category:
+        where_clauses.append("category ILIKE %s")
+        params.append(f"%{category}%")
+
+    where_str = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    params.append(limit)
+
+    query_str = f"""
+        SELECT id, title, category, store_name, current_price, original_price, discount_percentage, image_url, product_url, scraped_at
+        FROM beauty_products
+        {where_str}
+        ORDER BY scraped_at DESC 
+        LIMIT %s;
+    """
+
+    cursor.execute(query_str, params)
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    products = [
+        {
+            "id": r["id"],
+            "title": r["title"],
+            "category": r["category"],
+            "store_name": r["store_name"],
+            "current_price": float(r["current_price"]) if r["current_price"] else 0.0,
+            "original_price": float(r["original_price"]) if r["original_price"] else 0.0,
+            "discount_percentage": r["discount_percentage"],
+            "image_url": r["image_url"],
+            "product_url": r["product_url"],
+            "scraped_at": str(r["scraped_at"])
+        }
+        for r in rows
+    ]
+    return {"count": len(products), "products": products}
+
+
+@app.get(
+    "/beauty-products/stats",
+    summary="Get Beauty Database Scrape Statistics",
+    tags=["Beauty Deals"],
+)
+def get_beauty_stats():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT store_name, COUNT(*), MAX(scraped_at)
+        FROM beauty_products
+        GROUP BY store_name
+        ORDER BY COUNT(*) DESC;
+    """)
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    return {
+        "stores": [
+            {
+                "store": r["store_name"],
+                "total_items": r["count"],
+                "last_scraped": str(r["max"])
+            }
+            for r in rows
+        ]
     }
 
 
