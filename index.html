@@ -84,7 +84,10 @@
             </div>
 
             <div id="fuel-best-card" class="hidden bg-emerald-950/80 border border-emerald-500/40 p-6 rounded-2xl relative overflow-hidden">
-                <span class="absolute top-4 right-4 bg-emerald-500 text-slate-950 font-black text-xs px-3 py-1 rounded-full uppercase tracking-wider">Best Price</span>
+                <div class="absolute top-4 right-4 flex items-center gap-2">
+                    <span id="best-freshness-badge"></span>
+                    <span class="bg-emerald-500 text-slate-950 font-black text-xs px-3 py-1 rounded-full uppercase tracking-wider">Best Price</span>
+                </div>
                 <div id="fuel-best-content"></div>
             </div>
 
@@ -201,6 +204,13 @@
             });
         }
 
+        function getFreshnessBadgeHtml(st) {
+            if (st.is_stale) {
+                return `<span class="bg-rose-500/20 text-rose-400 border border-rose-500/30 font-semibold text-[10px] px-2 py-0.5 rounded-full">⚠️ Stale (${st.age_hours || 12}h)</span>`;
+            }
+            return `<span class="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold text-[10px] px-2 py-0.5 rounded-full">⚡ Live</span>`;
+        }
+
         async function fetchFuelData() {
             const listEl = document.getElementById('fuel-list');
             try {
@@ -217,6 +227,7 @@
 
                 const best = data.best_option;
                 document.getElementById('fuel-best-card').classList.remove('hidden');
+                document.getElementById('best-freshness-badge').innerHTML = getFreshnessBadgeHtml(best);
                 document.getElementById('fuel-best-content').innerHTML = `
                     <div class="text-xs font-bold text-emerald-400 uppercase tracking-wider">${best.chain_name}</div>
                     <div class="text-2xl font-bold text-slate-100">${best.station_name}</div>
@@ -227,7 +238,10 @@
                 listEl.innerHTML = data.all_stations.slice(1).map(st => `
                     <div class="bg-slate-900 border border-slate-800/80 p-4 rounded-xl flex justify-between items-center hover:border-slate-700 transition">
                         <div>
-                            <div class="font-bold text-slate-200">${st.station_name}</div>
+                            <div class="flex items-center gap-2">
+                                <span class="font-bold text-slate-200">${st.station_name}</span>
+                                ${getFreshnessBadgeHtml(st)}
+                            </div>
                             <div class="text-xs text-slate-400 mt-0.5">${st.address} • ${st.distance_km} km</div>
                         </div>
                         <div class="text-right">
@@ -405,7 +419,6 @@
             container.innerHTML = `<div class="text-center py-8 text-slate-500">Searching live stop departures...</div>`;
 
             try {
-                // FIXED ROUTE ENDPOINT ON LINE 408 BELOW:
                 const res = await fetch(`${API_BASE}/api/transport/departures?stop_name=${encodeURIComponent(stop)}`);
                 const data = await res.json();
 
