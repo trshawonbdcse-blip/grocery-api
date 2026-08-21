@@ -257,6 +257,7 @@ def find_cheapest_fuel(
             p.fuel_type,
             p.price_per_liter,
             p.updated_at,
+            ROUND(EXTRACT(EPOCH FROM (NOW() - p.updated_at)) / 3600, 1) AS age_hours,
             ROUND((
                 6371 * acos(
                     LEAST(1.0, GREATEST(-1.0,
@@ -300,7 +301,9 @@ def find_cheapest_fuel(
         )
 
     for idx, station in enumerate(stations):
+        age = float(station.get("age_hours", 0) or 0)
         station["is_best_option"] = (idx == 0)
+        station["is_stale"] = age > 12.0
         station["source"] = f"Estonia Public Station Index ({station['chain_name']})"
         station["updated_at_formatted"] = station["updated_at"].strftime("%Y-%m-%d %H:%M EEST") if station.get("updated_at") else "Live"
 

@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 debug_*.png
 debug_beauty.py
+.vercel
+.env*

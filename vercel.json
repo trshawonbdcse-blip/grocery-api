@@ -1,9 +1,10 @@
 {
-  "cleanUrls": true,
-  "rewrites": [
+  "version": 2,
+  "framework": null,
+  "routes": [
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "src": "/(.*)",
+      "dest": "/index.html"
     }
   ]
 }
