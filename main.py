@@ -16,7 +16,7 @@ from transport_service import router as transport_router
 app = FastAPI(
     title="Tallinn Grocery, Beauty, Transport & Fuel API",
     description="Unified API for grocery price comparison, beauty deals, live Tallinn transport, and nearby fuel price engine.",
-    version="2.0.0",
+    version="2.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -256,6 +256,7 @@ def find_cheapest_fuel(
             s.longitude,
             p.fuel_type,
             p.price_per_liter,
+            p.updated_at,
             ROUND((
                 6371 * acos(
                     LEAST(1.0, GREATEST(-1.0,
@@ -300,11 +301,15 @@ def find_cheapest_fuel(
 
     for idx, station in enumerate(stations):
         station["is_best_option"] = (idx == 0)
+        station["source"] = f"Estonia Public Station Index ({station['chain_name']})"
+        station["updated_at_formatted"] = station["updated_at"].strftime("%Y-%m-%d %H:%M EEST") if station.get("updated_at") else "Live"
 
     return {
         "status": "success",
         "radius_km": radius_km,
         "fuel_type": fuel_type,
+        "data_source": "Estonian Fuel Price Aggregator & OpenStreetMap",
+        "last_updated": stations[0]["updated_at_formatted"],
         "best_option": stations[0],
         "all_stations": stations
     }
