@@ -14,9 +14,9 @@ from psycopg2.extras import RealDictCursor
 from transport_service import router as transport_router
 
 app = FastAPI(
-    title="Tallinn Grocery, Beauty & Transport API",
-    description="Unified API for grocery price comparison, beauty deals, and live Tallinn public transport tracking.",
-    version="1.8.0",
+    title="Tallinn Grocery, Beauty, Transport & Fuel API",
+    description="Unified API for grocery price comparison, beauty deals, live Tallinn transport, and nearby fuel price engine.",
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -221,8 +221,92 @@ class BasketComparisonResponse(BaseModel):
 def root():
     return {
         "status": "online",
-        "service": "Tallinn Grocery, Beauty & Transport Backend",
+        "service": "Tallinn Grocery, Beauty, Transport & Fuel Backend",
         "swagger_docs": "https://grocery-api-p313.onrender.com/docs",
+    }
+
+
+# --- FUEL ENGINE ENDPOINTS ---
+@app.get(
+    "/api/fuel/find-cheapest",
+    summary="Find Cheapest Fuel Stations by User GPS Radius",
+    tags=["Fuel Station Engine"],
+)
+def find_cheapest_fuel(
+    lat: float = Query(..., example=59.4120, description="Detected user latitude"),
+    lng: float = Query(..., example=24.6750, description="Detected user longitude"),
+    fuel_type: str = Query("95", regex="^(95|98|Diesel|LPG)$", description="Fuel type selection"),
+    radius_km: float = Query(3.0, description="Search radius in km: 3.0, 5.0, or 10.0")
+):
+    if radius_km not in [3.0, 5.0, 10.0]:
+        raise HTTPException(
+            status_code=400, detail="Allowed radius values are 3.0, 5.0, or 10.0 km."
+        )
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    query = """
+        SELECT 
+            s.id AS station_id,
+            s.chain_name,
+            s.station_name,
+            s.address,
+            s.latitude,
+            s.longitude,
+            p.fuel_type,
+            p.price_per_liter,
+            ROUND((
+                6371 * acos(
+                    LEAST(1.0, GREATEST(-1.0,
+                        cos(radians(%s)) * cos(radians(s.latitude)) *
+                        cos(radians(s.longitude) - radians(%s)) +
+                        sin(radians(%s)) * sin(radians(s.latitude))
+                    ))
+                )
+            )::numeric, 2) AS distance_km
+        FROM fuel_stations s
+        JOIN fuel_prices p ON s.id = p.station_id
+        WHERE p.fuel_type = %s
+          AND (
+            6371 * acos(
+                LEAST(1.0, GREATEST(-1.0,
+                    cos(radians(%s)) * cos(radians(s.latitude)) *
+                    cos(radians(s.longitude) - radians(%s)) +
+                    sin(radians(%s)) * sin(radians(s.latitude))
+                ))
+            )
+          ) <= %s
+        ORDER BY p.price_per_liter ASC, distance_km ASC;
+    """
+
+    try:
+        cur.execute(query, (lat, lng, lat, fuel_type, lat, lng, lat, radius_km))
+        stations = cur.fetchall()
+    except Exception as e:
+        conn.rollback()
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=500, detail=f"Database query error: {str(e)}")
+
+    cur.close()
+    conn.close()
+
+    if not stations:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"No stations offering {fuel_type} found within a {radius_km} km radius."
+        )
+
+    for idx, station in enumerate(stations):
+        station["is_best_option"] = (idx == 0)
+
+    return {
+        "status": "success",
+        "radius_km": radius_km,
+        "fuel_type": fuel_type,
+        "best_option": stations[0],
+        "all_stations": stations
     }
 
 
