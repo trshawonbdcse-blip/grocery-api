@@ -226,30 +226,37 @@
                 document.getElementById('fuel-last-updated').innerText = `Updated: ${data.last_updated || 'Live'}`;
 
                 const best = data.best_option;
+                const bestTimeDisplay = best.updated_at_formatted || (best.age_hours !== undefined ? `${best.age_hours}h ago` : 'Live');
+
                 document.getElementById('fuel-best-card').classList.remove('hidden');
                 document.getElementById('best-freshness-badge').innerHTML = getFreshnessBadgeHtml(best);
                 document.getElementById('fuel-best-content').innerHTML = `
                     <div class="text-xs font-bold text-emerald-400 uppercase tracking-wider">${best.chain_name}</div>
                     <div class="text-2xl font-bold text-slate-100">${best.station_name}</div>
                     <div class="text-xs text-slate-400 mt-1">${best.address} • <strong class="text-slate-200">${best.distance_km} km away</strong></div>
+                    <div class="text-[11px] text-emerald-300/80 mt-1.5 flex items-center gap-1 font-medium">🕒 Last synced: ${bestTimeDisplay}</div>
                     <div class="text-3xl font-black text-emerald-300 mt-3">€${parseFloat(best.price_per_liter).toFixed(3)} <span class="text-xs font-normal text-slate-400">/ liter</span></div>
                 `;
 
-                listEl.innerHTML = data.all_stations.slice(1).map(st => `
-                    <div class="bg-slate-900 border border-slate-800/80 p-4 rounded-xl flex justify-between items-center hover:border-slate-700 transition">
-                        <div>
-                            <div class="flex items-center gap-2">
-                                <span class="font-bold text-slate-200">${st.station_name}</span>
-                                ${getFreshnessBadgeHtml(st)}
+                listEl.innerHTML = data.all_stations.slice(1).map(st => {
+                    const stationTimeDisplay = st.updated_at_formatted || (st.age_hours !== undefined ? `${st.age_hours}h ago` : 'Live');
+                    return `
+                        <div class="bg-slate-900 border border-slate-800/80 p-4 rounded-xl flex justify-between items-center hover:border-slate-700 transition">
+                            <div>
+                                <div class="flex items-center gap-2">
+                                    <span class="font-bold text-slate-200">${st.station_name}</span>
+                                    ${getFreshnessBadgeHtml(st)}
+                                </div>
+                                <div class="text-xs text-slate-400 mt-0.5">${st.address} • ${st.distance_km} km</div>
+                                <div class="text-[11px] text-sky-400/80 mt-1 flex items-center gap-1 font-medium">🕒 Updated: ${stationTimeDisplay}</div>
                             </div>
-                            <div class="text-xs text-slate-400 mt-0.5">${st.address} • ${st.distance_km} km</div>
+                            <div class="text-right">
+                                <div class="text-lg font-bold text-sky-400">€${parseFloat(st.price_per_liter).toFixed(3)}</div>
+                                <div class="text-[10px] text-slate-500">${st.chain_name}</div>
+                            </div>
                         </div>
-                        <div class="text-right">
-                            <div class="text-lg font-bold text-sky-400">€${parseFloat(st.price_per_liter).toFixed(3)}</div>
-                            <div class="text-[10px] text-slate-500">${st.chain_name}</div>
-                        </div>
-                    </div>
-                `).join('');
+                    `;
+                }).join('');
 
             } catch (err) {
                 listEl.innerHTML = `<p class="text-center py-8 text-rose-400 font-semibold">Failed to fetch live fuel prices.</p>`;
