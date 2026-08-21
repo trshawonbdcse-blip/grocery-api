@@ -15,8 +15,8 @@ from transport_service import router as transport_router
 
 app = FastAPI(
     title="Tallinn Grocery, Beauty, Transport & Fuel API",
-    description="Unified API for grocery price comparison, beauty deals, live Tallinn transport, and nearby fuel price engine.",
-    version="2.1.0",
+    description="Unified API for grocery price comparison (Text & EAN Barcode), beauty deals, live Tallinn transport, and nearby fuel price engine.",
+    version="2.2.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -191,6 +191,7 @@ class SuggestionItem(BaseModel):
     category: str = Field(..., examples=["Dairy & Eggs"])
     price_formatted: str = Field(..., examples=["€0.79"])
     store: str = Field(..., examples=["Maxima EE"])
+    ean: Optional[str] = Field(None, examples=["5029053564128"])
 
 class AutocompleteResponse(BaseModel):
     query: str = Field(..., examples=["piim"])
@@ -199,6 +200,9 @@ class AutocompleteResponse(BaseModel):
 
 class BasketRequest(BaseModel):
     items: List[str] = Field(..., examples=[["Egg", "Milk", "Bread"]])
+
+class EanBasketRequest(BaseModel):
+    eans: List[str] = Field(..., examples=[["5029053564128", "4740012010012"]])
 
 class StoreTotal(BaseModel):
     store_name: str = Field(..., examples=["Maxima EE"])
@@ -364,7 +368,7 @@ def autocomplete_search(
         params.append(category)
 
     query_str = f"""
-        SELECT DISTINCT ON (product_name) product_name, category, store_name, price 
+        SELECT DISTINCT ON (product_name) product_name, category, store_name, price, ean 
         FROM grocery_products 
         {where_clause}
         ORDER BY product_name, price ASC 
@@ -382,6 +386,7 @@ def autocomplete_search(
             "category": r["category"],
             "price_formatted": f"€{float(r['price']):.2f}",
             "store": r["store_name"],
+            "ean": r.get("ean")
         }
         for r in results
     ]
@@ -392,7 +397,7 @@ def autocomplete_search(
 @app.post(
     "/api/basket/compare",
     response_model=BasketComparisonResponse,
-    summary="Calculate Cheapest Supermarket Strategy",
+    summary="Calculate Cheapest Supermarket Strategy (Text-Based)",
     tags=["Basket Comparison Engine"],
 )
 def compare_basket(request: BasketRequest):
@@ -473,6 +478,67 @@ def compare_basket(request: BasketRequest):
             "savings_formatted": f"Saved €{savings:.2f} vs {priciest_name}!",
         },
         "single_store_totals": rankings,
+    }
+
+
+# --- STEP 4: EAN-BASED BASKET COMPARISON ENDPOINT ---
+@app.post(
+    "/api/basket/compare-by-ean",
+    summary="Calculate Basket Totals by Exact Barcode (EAN/GTIN)",
+    tags=["Basket Comparison Engine"],
+)
+def compare_basket_by_ean(request: EanBasketRequest):
+    if not request.eans:
+        raise HTTPException(status_code=400, detail="EAN list cannot be empty")
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT ean, product_name, category, store_name, price 
+        FROM grocery_products 
+        WHERE ean = ANY(%s);
+        """,
+        (request.eans,),
+    )
+
+    matches = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    if not matches:
+        raise HTTPException(
+            status_code=404, detail="No matching products found for the provided EAN barcodes."
+        )
+
+    store_totals = {}
+    matched_items = []
+
+    for m in matches:
+        store = m["store_name"]
+        price = float(m["price"])
+        store_totals[store] = store_totals.get(store, 0.0) + price
+        matched_items.append({
+            "ean": m["ean"],
+            "title": m["product_name"],
+            "category": m["category"],
+            "store": store,
+            "price_formatted": f"€{price:.2f}"
+        })
+
+    sorted_stores = sorted(store_totals.items(), key=lambda x: x[1])
+    cheapest_name, cheapest_price = sorted_stores[0]
+    priciest_name, priciest_price = sorted_stores[-1]
+
+    return {
+        "strategy": {
+            "cheapest_store": cheapest_name,
+            "total_formatted": f"€{cheapest_price:.2f}",
+            "savings_formatted": f"Saved €{priciest_price - cheapest_price:.2f} vs {priciest_name}!",
+        },
+        "totals": [{"store_name": s, "total_formatted": f"€{p:.2f}"} for s, p in sorted_stores],
+        "matched_items": matched_items
     }
 
 

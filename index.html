@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tallinn Unified City Dashboard</title>
+    <title>Tallinn Smart Hub — Minu App OÜ</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -33,7 +33,7 @@
                 <span class="text-3xl">🇪🇪</span>
                 <div>
                     <h1 class="text-xl font-bold bg-gradient-to-r from-sky-400 to-emerald-400 bg-clip-text text-transparent">Tallinn Smart Hub</h1>
-                    <p class="text-xs text-slate-400">Grocery • Beauty • Transport • Fuel</p>
+                    <p class="text-xs text-slate-400">Grocery (EAN API) • Beauty • Transport • Fuel</p>
                 </div>
             </div>
 
@@ -99,12 +99,12 @@
         <!-- TAB 2: GROCERY BASKET -->
         <section id="sec-grocery" class="hidden space-y-6">
             <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-                <h2 class="text-xl font-bold text-sky-400">Smart Grocery Basket Optimizer</h2>
-                <p class="text-xs text-slate-400">Add items to compare total cost across Maxima, Selver, Rimi, and Prisma</p>
+                <h2 class="text-xl font-bold text-sky-400">Smart Grocery Basket Optimizer (EAN Barcode Powered)</h2>
+                <p class="text-xs text-slate-400">Add items to compare total cost across Maxima, Selver, Rimi, and Prisma using exact GTIN/EAN barcodes</p>
 
                 <div class="relative">
                     <div class="flex gap-2">
-                        <input type="text" id="grocery-input" placeholder="Type product name (e.g. piim, leib, munad)..." autocomplete="off" class="bg-slate-950 border border-slate-800 text-slate-100 rounded-xl px-4 py-2.5 flex-1 focus:outline-none focus:border-sky-500 text-sm">
+                        <input type="text" id="grocery-input" placeholder="Type product name or scan EAN barcode (e.g. piim, leib, 5029053564128)..." autocomplete="off" class="bg-slate-950 border border-slate-800 text-slate-100 rounded-xl px-4 py-2.5 flex-1 focus:outline-none focus:border-sky-500 text-sm font-mono">
                         <button onclick="addGroceryItemFromInput()" class="bg-sky-600 hover:bg-sky-500 text-white font-bold px-5 py-2.5 rounded-xl text-sm transition">+ Add</button>
                     </div>
 
@@ -115,7 +115,7 @@
             </div>
 
             <div id="grocery-strategy-banner" class="hidden bg-sky-950/80 border border-sky-500/40 p-6 rounded-2xl">
-                <div class="text-xs uppercase font-bold text-sky-400">Recommended Strategy</div>
+                <div class="text-xs uppercase font-bold text-sky-400">Recommended Supermarket Strategy</div>
                 <div id="strategy-store" class="text-2xl font-black mt-1">--</div>
                 <div id="strategy-savings" class="text-sm text-emerald-400 font-semibold mt-1">--</div>
             </div>
@@ -263,7 +263,7 @@
             }
         }
 
-        // --- GROCERY ENGINE ---
+        // --- GROCERY ENGINE WITH EAN AUTOCOMPLETE ---
         const groceryInput = document.getElementById('grocery-input');
         const dropdown = document.getElementById('autocomplete-dropdown');
 
@@ -293,7 +293,10 @@
                     <div onclick="selectAutocompleteItem('${s.title.replace(/'/g, "\\'")}')" class="p-3 hover:bg-slate-800 cursor-pointer flex justify-between items-center border-b border-slate-800/50 last:border-0">
                         <div>
                             <div class="text-sm font-semibold text-slate-100">${s.title}</div>
-                            <div class="text-xs text-slate-400">${s.category} • ${s.store}</div>
+                            <div class="text-xs text-slate-400 font-mono flex items-center gap-2">
+                                <span>${s.category} • ${s.store}</span>
+                                ${s.ean ? `<span class="bg-slate-800 border border-slate-700 text-sky-400 px-1.5 py-0.5 rounded text-[10px]">📊 EAN: ${s.ean}</span>` : ''}
+                            </div>
                         </div>
                         <div class="text-sm font-bold text-emerald-400">${s.price_formatted}</div>
                     </div>
