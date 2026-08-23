@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tallinn Fuel Finder (Location Based)</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    body { background-color: #121212; color: #fff; font-family: -apple-system, sans-serif; padding: 20px; margin: 0; }
+    .container { max-width: 500px; margin: 0 auto; }
+    .card { background: #1e1e1e; border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+    .cheapest { border-color: #10b981; }
+    .price { font-size: 1.3rem; font-weight: bold; }
+    .btn { flex: 1; background: #1e1e1e; color: #aaa; border: 1px solid #333; padding: 10px; border-radius: 8px; cursor: pointer; font-weight: bold; }
+    .btn.active { background: #2563eb; color: #fff; border-color: #3b82f6; }
+    .sort-select { background: #1e1e1e; color: #fff; border: 1px solid #333; padding: 6px 10px; border-radius: 6px; font-size: 0.85rem; }
+    #debug-box { background: #000; color: #00ff00; padding: 10px; font-family: monospace; font-size: 0.8rem; border-radius: 6px; margin-bottom: 16px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2 style="text-align: center; margin-bottom: 4px;">⛽ Tallinn Fuel Finder</h2>
+    <p style="text-align: center; color: #888; margin-top: 0; font-size: 0.85rem; margin-bottom: 16px;">Nearby Lowest Prices</p>
+    
+    <div id="debug-box">Status: Requesting location access...</div>
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+      <label style="font-size: 0.85rem; color: #aaa;">Sort by:</label>
+      <select id="sort-by" class="sort-select" onchange="render()">
+        <option value="price">Cheapest Price</option>
+        <option value="distance">Nearest Distance</option>
+      </select>
+    </div>
+
+    <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+      <button id="btn-price_95" class="btn active" onclick="filterFuel('price_95')">Euro 95</button>
+      <button id="btn-price_98" class="btn" onclick="filterFuel('price_98')">Euro 98</button>
+      <button id="btn-price_diesel" class="btn" onclick="filterFuel('price_diesel')">Diesel</button>
+    </div>
+
+    <div id="stations-list"></div>
+  </div>
+
+  <script>
+    const SUPABASE_URL = "https://ocxnykaqirzvwimyvdtt.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9jeG55a2FxaXJ6dndpbXl2ZHR0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcxMzI0NzAsImV4cCI6MjEwMjcwODQ3MH0.iSE6uX3DXq8X5ebuAWZ4gwqDDhlm5Sxf5h5BsDrx6X4";
+
+    let allStations = [];
+    let activeFuel = "price_95";
+    let userCoords = { lat: 59.4370, lon: 24.7535 }; // Default to Central Tallinn
+
+    // Haversine distance calculator in km
+    function getDistanceKm(lat1, lon1, lat2, lon2) {
+      if (!lat1 || !lon1 || !lat2 || !lon2) return 999;
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+      return (R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)))).toFixed(1);
+    }
+
+    function initLocation() {
+      const debugBox = document.getElementById("debug-box");
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            userCoords = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+            debugBox.innerHTML = `📍 GPS Active: (${userCoords.lat.toFixed(4)}, ${userCoords.lon.toFixed(4)})`;
+            loadData();
+          },
+          () => {
+            debugBox.innerHTML = "⚠️ Location denied. Defaulting to Central Tallinn distance.";
+            loadData();
+          }
+        );
+      } else {
+        loadData();
+      }
+    }
+
+    async function loadData() {
+      const debugBox = document.getElementById("debug-box");
+
+      try {
+        const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        const { data, error } = await client.from("fuel_stations").select("*");
+
+        if (error) {
+          debugBox.innerHTML += `\n❌ SUPABASE ERROR: ${error.message}`;
+          return;
+        }
+
+        allStations = (data || []).map(s => ({
+          ...s,
+          distanceKm: parseFloat(getDistanceKm(userCoords.lat, userCoords.lon, parseFloat(s.latitude), parseFloat(s.longitude)))
+        }));
+
+        debugBox.innerHTML += `\n✅ Loaded ${data.length} stations.`;
+        render();
+      } catch (err) {
+        debugBox.innerHTML += `\n❌ ERROR: ${err.message}`;
+      }
+    }
+
+    function filterFuel(type) {
+      activeFuel = type;
+      document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+      document.getElementById(`btn-${type}`).classList.add('active');
+      render();
+    }
+
+    function render() {
+      const listEl = document.getElementById("stations-list");
+      const sortBy = document.getElementById("sort-by").value;
+      if (!listEl || !allStations.length) return;
+
+      const sorted = [...allStations].sort((a, b) => {
+        if (sortBy === 'distance') return a.distanceKm - b.distanceKm;
+        return (a[activeFuel] || 99) - (b[activeFuel] || 99);
+      });
+
+      const lowest = Math.min(...sorted.map(s => s[activeFuel]).filter(Boolean));
+
+      listEl.innerHTML = sorted.map(s => {
+        const isCheapest = s[activeFuel] === lowest;
+        const val = s[activeFuel] ? `€${parseFloat(s[activeFuel]).toFixed(3)}` : 'N/A';
+        const distStr = s.distanceKm < 900 ? `${s.distanceKm} km away` : 'Tallinn';
+
+        return `
+          <div class="card ${isCheapest ? 'cheapest' : ''}">
+            <div>
+              <small style="color:#3b82f6; font-weight:bold; text-transform:uppercase;">${s.brand || 'Station'}</small>
+              <div style="font-weight:bold; margin:2px 0;">${s.station_name}</div>
+              <small style="color:#aaa">${s.address || 'Tallinn'}</small>
+              <div style="font-size:0.75rem; color:#888; margin-top:4px;">📍 ${distStr}</div>
+            </div>
+            <div style="text-align:right;">
+              <div class="price" style="color:${isCheapest ? '#10b981' : '#fff'}">${val}</div>
+              ${isCheapest ? '<small style="background:#10b981; color:#000; padding:2px 6px; border-radius:4px; font-weight:bold;">LOWEST</small>' : ''}
+              <div style="margin-top:6px;">
+                <a href="https://www.google.com/maps/dir/?api=1&destination=${s.latitude},${s.longitude}" target="_blank" style="color:#3b82f6; text-decoration:none; font-size:0.8rem; font-weight:bold;">Maps ↗</a>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    window.addEventListener('DOMContentLoaded', initLocation);
+  </script>
+</body>
+</html>
