@@ -3,41 +3,74 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Tallinn Fuel Finder (Location Based)</title>
+  <title>Tallinn Fuel Finder (Map + GPS)</title>
+  
+  <!-- Supabase JS Client v2 -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  
+  <!-- Leaflet CSS & JS for Interactive Map -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
   <style>
-    body { background-color: #121212; color: #fff; font-family: -apple-system, sans-serif; padding: 20px; margin: 0; }
-    .container { max-width: 500px; margin: 0 auto; }
+    body { background-color: #121212; color: #fff; font-family: -apple-system, sans-serif; padding: 16px; margin: 0; }
+    .container { max-width: 600px; margin: 0 auto; }
+    
     .card { background: #1e1e1e; border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
     .cheapest { border-color: #10b981; }
     .price { font-size: 1.3rem; font-weight: bold; }
+    
     .btn { flex: 1; background: #1e1e1e; color: #aaa; border: 1px solid #333; padding: 10px; border-radius: 8px; cursor: pointer; font-weight: bold; }
     .btn.active { background: #2563eb; color: #fff; border-color: #3b82f6; }
     .sort-select { background: #1e1e1e; color: #fff; border: 1px solid #333; padding: 6px 10px; border-radius: 6px; font-size: 0.85rem; }
-    #debug-box { background: #000; color: #00ff00; padding: 10px; font-family: monospace; font-size: 0.8rem; border-radius: 6px; margin-bottom: 16px; white-space: pre-wrap; }
+    
+    #debug-box { background: #000; color: #00ff00; padding: 10px; font-family: monospace; font-size: 0.8rem; border-radius: 6px; margin-bottom: 12px; white-space: pre-wrap; }
+    
+    /* Map Container */
+    #map { height: 350px; width: 100%; border-radius: 12px; border: 1px solid #333; margin-bottom: 16px; }
+    .view-toggle { display: flex; gap: 8px; margin-bottom: 12px; }
+    .view-btn { background: #222; color: #fff; border: 1px solid #444; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+    .view-btn.active { background: #10b981; border-color: #059669; }
+
+    /* Custom Map Marker Popup Styling */
+    .leaflet-popup-content-wrapper { background: #1e1e1e; color: #fff; border: 1px solid #333; border-radius: 8px; }
+    .leaflet-popup-tip { background: #1e1e1e; }
   </style>
 </head>
 <body>
   <div class="container">
     <h2 style="text-align: center; margin-bottom: 4px;">⛽ Tallinn Fuel Finder</h2>
-    <p style="text-align: center; color: #888; margin-top: 0; font-size: 0.85rem; margin-bottom: 16px;">Nearby Lowest Prices</p>
+    <p style="text-align: center; color: #888; margin-top: 0; font-size: 0.85rem; margin-bottom: 16px;">Live GPS & Interactive Map</p>
     
     <div id="debug-box">Status: Requesting location access...</div>
 
+    <!-- Map / List Mode Toggle -->
+    <div class="view-toggle">
+      <button id="toggle-map-btn" class="view-btn active" onclick="switchView('map')">🗺️ Map View</button>
+      <button id="toggle-list-btn" class="view-btn" onclick="switchView('list')">📋 List View</button>
+    </div>
+
+    <!-- Map View -->
+    <div id="map"></div>
+
+    <!-- Controls -->
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
       <label style="font-size: 0.85rem; color: #aaa;">Sort by:</label>
       <select id="sort-by" class="sort-select" onchange="render()">
         <option value="price">Cheapest Price</option>
         <option value="distance">Nearest Distance</option>
+        <option value="updated">Recently Updated</option>
       </select>
     </div>
 
+    <!-- Fuel Selection -->
     <div style="display: flex; gap: 8px; margin-bottom: 16px;">
       <button id="btn-price_95" class="btn active" onclick="filterFuel('price_95')">Euro 95</button>
       <button id="btn-price_98" class="btn" onclick="filterFuel('price_98')">Euro 98</button>
       <button id="btn-price_diesel" class="btn" onclick="filterFuel('price_diesel')">Diesel</button>
     </div>
 
+    <!-- Station Cards -->
     <div id="stations-list"></div>
   </div>
 
@@ -47,9 +80,35 @@
 
     let allStations = [];
     let activeFuel = "price_95";
-    let userCoords = { lat: 59.4370, lon: 24.7535 }; // Default to Central Tallinn
+    let userCoords = { lat: 59.4370, lon: 24.7535 }; // Default Tallinn Center
+    let map, markersGroup;
+    let currentView = "map";
 
-    // Haversine distance calculator in km
+    // Format Relative Timestamp (e.g. "12m ago", "3h ago")
+    function formatTimeAgo(dateString) {
+      if (!dateString) return "Unknown";
+      
+      const utcString = dateString.endsWith('Z') || dateString.includes('+') 
+        ? dateString 
+        : dateString.replace(' ', 'T') + 'Z';
+
+      const updatedDate = new Date(utcString);
+      if (isNaN(updatedDate.getTime())) return dateString;
+
+      const now = new Date();
+      const diffInMinutes = Math.floor((now - updatedDate) / (1000 * 60));
+
+      if (diffInMinutes < 1) return "Just now";
+      if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
+      
+      const diffInHours = Math.floor(diffInMinutes / 60);
+      if (diffInHours < 24) return `${diffInHours}h ago`;
+      
+      const diffInDays = Math.floor(diffInHours / 24);
+      return `${diffInDays}d ago`;
+    }
+
+    // Haversine Distance Calculation (km)
     function getDistanceKm(lat1, lon1, lat2, lon2) {
       if (!lat1 || !lon1 || !lat2 || !lon2) return 999;
       const R = 6371;
@@ -61,6 +120,34 @@
       return (R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)))).toFixed(1);
     }
 
+    // Initialize Leaflet Map
+    function initMap() {
+      map = L.map('map').setView([userCoords.lat, userCoords.lon], 13);
+      
+      // Dark Mode Tile Layer (CartoDB Dark Matter)
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OpenStreetMap &copy; CARTO',
+        maxZoom: 18
+      }).addTo(map);
+
+      // Add User GPS Blue Circle
+      L.circleMarker([userCoords.lat, userCoords.lon], {
+        color: '#2563eb',
+        fillColor: '#3b82f6',
+        fillOpacity: 0.8,
+        radius: 8
+      }).addTo(map).bindPopup("<b>📍 Your Location</b>");
+
+      markersGroup = L.layerGroup().addTo(map);
+    }
+
+    function switchView(mode) {
+      currentView = mode;
+      document.getElementById('toggle-map-btn').classList.toggle('active', mode === 'map');
+      document.getElementById('toggle-list-btn').classList.toggle('active', mode === 'list');
+      document.getElementById('map').style.display = mode === 'map' ? 'block' : 'none';
+    }
+
     function initLocation() {
       const debugBox = document.getElementById("debug-box");
       if (navigator.geolocation) {
@@ -68,14 +155,17 @@
           (pos) => {
             userCoords = { lat: pos.coords.latitude, lon: pos.coords.longitude };
             debugBox.innerHTML = `📍 GPS Active: (${userCoords.lat.toFixed(4)}, ${userCoords.lon.toFixed(4)})`;
+            initMap();
             loadData();
           },
           () => {
             debugBox.innerHTML = "⚠️ Location denied. Defaulting to Central Tallinn distance.";
+            initMap();
             loadData();
           }
         );
       } else {
+        initMap();
         loadData();
       }
     }
@@ -118,15 +208,41 @@
 
       const sorted = [...allStations].sort((a, b) => {
         if (sortBy === 'distance') return a.distanceKm - b.distanceKm;
+        if (sortBy === 'updated') return new Date(b.updated_at) - new Date(a.updated_at);
         return (a[activeFuel] || 99) - (b[activeFuel] || 99);
       });
 
       const lowest = Math.min(...sorted.map(s => s[activeFuel]).filter(Boolean));
 
+      // Clear existing map pins
+      if (markersGroup) markersGroup.clearLayers();
+
       listEl.innerHTML = sorted.map(s => {
         const isCheapest = s[activeFuel] === lowest;
         const val = s[activeFuel] ? `€${parseFloat(s[activeFuel]).toFixed(3)}` : 'N/A';
         const distStr = s.distanceKm < 900 ? `${s.distanceKm} km away` : 'Tallinn';
+        const updatedTimeAgo = formatTimeAgo(s.updated_at);
+
+        // Add Pin to Leaflet Map
+        if (s.latitude && s.longitude && markersGroup) {
+          const markerColor = isCheapest ? '#10b981' : '#2563eb';
+          const marker = L.circleMarker([s.latitude, s.longitude], {
+            color: markerColor,
+            fillColor: markerColor,
+            fillOpacity: 0.9,
+            radius: isCheapest ? 10 : 7
+          });
+
+          marker.bindPopup(`
+            <div style="font-size:0.85rem;">
+              <strong style="color:#3b82f6;">${s.brand || 'Station'}</strong><br/>
+              <b>${s.station_name}</b><br/>
+              <span style="font-size:1.1rem; font-weight:bold; color:${isCheapest ? '#10b981' : '#fff'};">${val}</span><br/>
+              <small style="color:#aaa;">📍 ${distStr} • 🕒 ${updatedTimeAgo}</small>
+            </div>
+          `);
+          markersGroup.addLayer(marker);
+        }
 
         return `
           <div class="card ${isCheapest ? 'cheapest' : ''}">
@@ -134,7 +250,9 @@
               <small style="color:#3b82f6; font-weight:bold; text-transform:uppercase;">${s.brand || 'Station'}</small>
               <div style="font-weight:bold; margin:2px 0;">${s.station_name}</div>
               <small style="color:#aaa">${s.address || 'Tallinn'}</small>
-              <div style="font-size:0.75rem; color:#888; margin-top:4px;">📍 ${distStr}</div>
+              <div style="font-size:0.75rem; color:#888; margin-top:4px;">
+                📍 ${distStr} &nbsp;•&nbsp; 🕒 ${updatedTimeAgo}
+              </div>
             </div>
             <div style="text-align:right;">
               <div class="price" style="color:${isCheapest ? '#10b981' : '#fff'}">${val}</div>
