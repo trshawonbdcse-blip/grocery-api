@@ -22,9 +22,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests psycopg2-binary beautifulsoup4 playwright
 
-      - name: Install Playwright Browsers
+      - name: Install Playwright Chromium Browser
         run: |
-          playwright install --with-deps chromium
+          npx playwright install --with-deps chromium
 
       - name: Run Fuel Sync Pipeline
         env:
