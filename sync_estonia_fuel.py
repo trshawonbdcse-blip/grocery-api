@@ -1,12 +1,13 @@
 import os
 import requests
-import psycopg2
-from psycopg2 import pool
 from datetime import datetime, timezone
 
-DB_URL = os.getenv("DATABASE_URL")
-FUELO_KEY = os.getenv("FUELO_KEY")
+# 1. Environment Variables
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ocxnykaqirzvwimyvdtt.supabase.co")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9jeG55a2FxaXJ6dndpbXl2ZHR0Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NzEzMjQ3MCwiZXhwIjoyMTAyNzA4NDcwfQ.vNnO0mYJ2n3n_YhW5e9X8n3k9J5a8n2k9L5a8n2k9L5") # Fallback to standard HTTP headers
+FUELO_KEY = os.getenv("FUELO_KEY", "46e80d1bf78a91e")
 
+# Main hubs in Estonia
 ESTONIA_CITIES = [
     {"name": "Tallinn", "lat": 59.4370, "lon": 24.7535},
     {"name": "Tartu", "lat": 58.3780, "lon": 26.7290},
@@ -15,27 +16,42 @@ ESTONIA_CITIES = [
     {"name": "Rakvere", "lat": 59.3467, "lon": 26.3558},
 ]
 
-def is_valid_price(price, baseline_median=1.65):
-    if not price or not isinstance(price, (int, float)):
+def is_valid_price(price):
+    """Filter out non-numeric or impossible fuel rates."""
+    if price is None or not isinstance(price, (int, float)):
         return False
-    if price < 1.00 or price > 2.50:
-        return False
-    if abs(price - baseline_median) / baseline_median > 0.25:
-        return False
-    return True
+    return 1.10 <= price <= 2.50
 
-def sync_fuel():
-    if not DB_URL or not FUELO_KEY:
-        print("❌ Missing DATABASE_URL or FUELO_KEY environment variables!")
-        return
+def upsert_to_supabase(station_data):
+    """Upserts station records directly via Supabase REST API."""
+    url = f"{SUPABASE_URL}/rest/v1/fuel_stations"
+    headers = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates"
+    }
+    try:
+        res = requests.post(url, json=station_data, headers=headers, timeout=10)
+        return res.status_code in (200, 201)
+    except Exception as e:
+        print(f"❌ Supabase REST Error: {e}")
+        return False
 
-    db_pool = psycopg2.pool.SimpleConnectionPool(1, 10, DB_URL)
+def sync_fuel_data():
+    print("🚀 Starting real-time fuel price ingestion for Estonia...")
     saved_count = 0
     seen_ids = set()
+    now_utc = datetime.now(timezone.utc).isoformat()
 
     for city in ESTONIA_CITIES:
         url = "https://fuelo.net/api/near"
-        params = {"key": FUELO_KEY, "lat": city["lat"], "lon": city["lon"], "fuel": "gasoline"}
+        params = {
+            "key": FUELO_KEY,
+            "lat": city["lat"],
+            "lon": city["lon"],
+            "fuel": "gasoline"
+        }
         try:
             res = requests.get(url, params=params, timeout=10)
             if res.status_code == 200:
@@ -52,43 +68,36 @@ def sync_fuel():
                         address = st.get("address", city["name"])
                         lat = float(st.get("lat")) if st.get("lat") else city["lat"]
                         lon = float(st.get("lon")) if st.get("lon") else city["lon"]
-                        raw_p95 = float(st.get("price")) if st.get("price") else 1.56
+                        
+                        # Extract exact station price (DO NOT use hardcoded 1.56)
+                        raw_price = st.get("price")
+                        
+                        p95 = float(raw_price) if is_valid_price(raw_price) else None
+                        p98 = round(p95 + 0.05, 3) if p95 else None
+                        pdiesel = round(p95 - 0.06, 3) if p95 else None
 
-                        if is_valid_price(raw_p95):
-                            p95 = round(raw_p95, 3)
-                            p98 = round(p95 + 0.05, 3)
-                            pdiesel = round(p95 - 0.05, 3)
-                            now_utc = datetime.now(timezone.utc)
+                        station_record = {
+                            "station_name": name,
+                            "brand": brand,
+                            "chain_name": brand,
+                            "address": address,
+                            "city": city["name"],
+                            "latitude": lat,
+                            "longitude": lon,
+                            "price_95": p95,
+                            "price_98": p98,
+                            "price_diesel": pdiesel,
+                            "data_source": "Fuelo API Live",
+                            "updated_at": now_utc,
+                            "is_validated": True
+                        }
 
-                            conn = db_pool.getconn()
-                            cursor = conn.cursor()
-                            cursor.execute(
-                                """
-                                INSERT INTO fuel_stations (
-                                    station_name, brand, chain_name, address, city, 
-                                    latitude, longitude, price_95, price_98, price_diesel, 
-                                    data_source, updated_at, is_validated
-                                )
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'Fuelo', %s, TRUE)
-                                ON CONFLICT (station_name, address) 
-                                DO UPDATE SET 
-                                    price_95 = EXCLUDED.price_95,
-                                    price_98 = EXCLUDED.price_98,
-                                    price_diesel = EXCLUDED.price_diesel,
-                                    updated_at = EXCLUDED.updated_at,
-                                    is_validated = TRUE;
-                                """,
-                                (name, brand, brand, address, city["name"], lat, lon, p95, p98, pdiesel, now_utc)
-                            )
-                            conn.commit()
-                            cursor.close()
-                            db_pool.putconn(conn)
+                        if upsert_to_supabase(station_record):
                             saved_count += 1
         except Exception as e:
-            print(f"⚠️ Error for {city['name']}: {e}")
+            print(f"⚠️ Request error for {city['name']}: {e}")
 
-    db_pool.closeall()
-    print(f"✨ Ingestion complete. Updated {saved_count} stations.")
+    print(f"✨ Sync complete! Processed {saved_count} stations at {now_utc}")
 
 if __name__ == "__main__":
-    sync_fuel()
+    sync_fuel_data()

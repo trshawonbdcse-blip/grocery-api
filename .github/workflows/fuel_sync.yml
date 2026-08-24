@@ -2,6 +2,7 @@ name: Estonia Fuel Price Sync
 
 on:
   schedule:
+    # Runs every 10 minutes
     - cron: '*/10 * * * *'
   workflow_dispatch:
 
@@ -9,7 +10,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repo
+      - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -17,13 +18,14 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests psycopg2-binary
+          pip install requests
 
-      - name: Run Fuel Sync Pipeline
+      - name: Execute Fuel Ingestion Pipeline
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           FUELO_KEY: ${{ secrets.FUELO_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python sync_estonia_fuel.py
