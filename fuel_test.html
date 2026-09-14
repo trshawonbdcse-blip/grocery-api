@@ -26,13 +26,11 @@
     
     #debug-box { background: #000; color: #00ff00; padding: 10px; font-family: monospace; font-size: 0.8rem; border-radius: 6px; margin-bottom: 12px; white-space: pre-wrap; }
     
-    /* Map Container */
     #map { height: 350px; width: 100%; border-radius: 12px; border: 1px solid #333; margin-bottom: 16px; }
     .view-toggle { display: flex; gap: 8px; margin-bottom: 12px; }
     .view-btn { background: #222; color: #fff; border: 1px solid #444; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
     .view-btn.active { background: #10b981; border-color: #059669; }
 
-    /* Custom Map Marker Popup Styling */
     .leaflet-popup-content-wrapper { background: #1e1e1e; color: #fff; border: 1px solid #333; border-radius: 8px; }
     .leaflet-popup-tip { background: #1e1e1e; }
   </style>
@@ -81,10 +79,10 @@
     let allStations = [];
     let activeFuel = "price_95";
     let userCoords = { lat: 59.4370, lon: 24.7535 }; // Default Tallinn Center
-    let map, markersGroup;
-    let currentView = "map";
+    let map = null;
+    let markersGroup = null;
 
-    // Format Relative Timestamp (e.g. "12m ago", "3h ago")
+    // Relative Timestamp Generator
     function formatTimeAgo(dateString) {
       if (!dateString) return "Unknown";
       
@@ -108,7 +106,7 @@
       return `${diffInDays}d ago`;
     }
 
-    // Haversine Distance Calculation (km)
+    // Accurate Haversine Formula
     function getDistanceKm(lat1, lon1, lat2, lon2) {
       if (!lat1 || !lon1 || !lat2 || !lon2) return 999;
       const R = 6371;
@@ -117,20 +115,21 @@
       const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
                 Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
                 Math.sin(dLon/2) * Math.sin(dLon/2);
-      return (R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)))).toFixed(1);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return (R * c).toFixed(1);
     }
 
-    // Initialize Leaflet Map
+    // Safe Leaflet Map Initialization
     function initMap() {
-      map = L.map('map').setView([userCoords.lat, userCoords.lon], 13);
+      if (map) return; // Prevent double initialization
+
+      map = L.map('map').setView([userCoords.lat, userCoords.lon], 12);
       
-      // Dark Mode Tile Layer (CartoDB Dark Matter)
       L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; OpenStreetMap &copy; CARTO',
         maxZoom: 18
       }).addTo(map);
 
-      // Add User GPS Blue Circle
       L.circleMarker([userCoords.lat, userCoords.lon], {
         color: '#2563eb',
         fillColor: '#3b82f6',
@@ -142,10 +141,14 @@
     }
 
     function switchView(mode) {
-      currentView = mode;
       document.getElementById('toggle-map-btn').classList.toggle('active', mode === 'map');
       document.getElementById('toggle-list-btn').classList.toggle('active', mode === 'list');
-      document.getElementById('map').style.display = mode === 'map' ? 'block' : 'none';
+      const mapEl = document.getElementById('map');
+      mapEl.style.display = mode === 'map' ? 'block' : 'none';
+      
+      if (mode === 'map' && map) {
+        setTimeout(() => map.invalidateSize(), 100);
+      }
     }
 
     function initLocation() {
@@ -162,7 +165,8 @@
             debugBox.innerHTML = "⚠️ Location denied. Defaulting to Central Tallinn distance.";
             initMap();
             loadData();
-          }
+          },
+          { timeout: 5000 }
         );
       } else {
         initMap();
@@ -184,7 +188,7 @@
 
         allStations = (data || []).map(s => ({
           ...s,
-          distanceKm: parseFloat(getDistanceKm(userCoords.lat, userCoords.lon, parseFloat(s.latitude), parseFloat(s.longitude)))
+          distanceKm: parseFloat(getDistanceKm(userCoords.lat, userCoords.lon, Number(s.latitude), Number(s.longitude)))
         }));
 
         debugBox.innerHTML += `\n✅ Loaded ${data.length} stations.`;
@@ -209,24 +213,23 @@
       const sorted = [...allStations].sort((a, b) => {
         if (sortBy === 'distance') return a.distanceKm - b.distanceKm;
         if (sortBy === 'updated') return new Date(b.updated_at) - new Date(a.updated_at);
-        return (a[activeFuel] || 99) - (b[activeFuel] || 99);
+        return (Number(a[activeFuel]) || 99) - (Number(b[activeFuel]) || 99);
       });
 
-      const lowest = Math.min(...sorted.map(s => s[activeFuel]).filter(Boolean));
+      const lowest = Math.min(...sorted.map(s => Number(s[activeFuel])).filter(v => v > 0));
 
-      // Clear existing map pins
       if (markersGroup) markersGroup.clearLayers();
 
       listEl.innerHTML = sorted.map(s => {
-        const isCheapest = s[activeFuel] === lowest;
-        const val = s[activeFuel] ? `€${parseFloat(s[activeFuel]).toFixed(3)}` : 'N/A';
+        const stationPrice = Number(s[activeFuel]);
+        const isCheapest = stationPrice > 0 && stationPrice === lowest;
+        const val = stationPrice ? `€${stationPrice.toFixed(3)}` : 'N/A';
         const distStr = s.distanceKm < 900 ? `${s.distanceKm} km away` : 'Tallinn';
         const updatedTimeAgo = formatTimeAgo(s.updated_at);
 
-        // Add Pin to Leaflet Map
         if (s.latitude && s.longitude && markersGroup) {
           const markerColor = isCheapest ? '#10b981' : '#2563eb';
-          const marker = L.circleMarker([s.latitude, s.longitude], {
+          const marker = L.circleMarker([Number(s.latitude), Number(s.longitude)], {
             color: markerColor,
             fillColor: markerColor,
             fillOpacity: 0.9,

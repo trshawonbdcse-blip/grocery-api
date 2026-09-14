@@ -10,13 +10,15 @@ from pydantic import BaseModel, Field
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-# --- IMPORT TRANSPORT ROUTER ---
+# --- IMPORT TRANSPORT & OUTLET SERVICES ---
 from transport_service import router as transport_router
+from outlets_service import get_outlet_data, DB_URL
+from dynamic_outlet_engine import fetch_malls_by_radius  # Dynamic OSM Overpass Engine
 
 app = FastAPI(
-    title="Tallinn Grocery, Beauty, Transport & Fuel API",
-    description="Unified API for grocery price comparison (Text & EAN Barcode), beauty deals, live Tallinn transport, and nearby fuel price engine.",
-    version="2.2.0",
+    title="Tallinn Grocery, Beauty, Transport, Fuel & Outlets API",
+    description="Unified API for grocery price comparison, beauty deals, live Tallinn transport, fuel prices, and mall clearance sales.",
+    version="3.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -32,8 +34,6 @@ app.add_middleware(
 
 # --- REGISTER TRANSPORT ROUTER ---
 app.include_router(transport_router)
-
-DB_URL = os.getenv("DATABASE_URL")
 
 
 def get_db():
@@ -225,9 +225,256 @@ class BasketComparisonResponse(BaseModel):
 def root():
     return {
         "status": "online",
-        "service": "Tallinn Grocery, Beauty, Transport & Fuel Backend",
-        "swagger_docs": "https://grocery-api-p313.onrender.com/docs",
+        "service": "Tallinn Grocery, Beauty, Transport, Fuel & Outlets Backend",
+        "swagger_docs": "http://127.0.0.1:8000/docs",
     }
+
+
+# --- TARK OSTUKORV EAN-BASED GROCERY COMPARISON ENGINE ---
+@app.get(
+    "/api/groceries/compare/{ean}",
+    summary="Get Multi-Store Price Comparison by EAN Barcode (Tark Ostukorv Style)",
+    tags=["Grocery Price Comparison Engine"],
+)
+def compare_grocery_by_ean(ean: str):
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        # Query store offers matching the product_name column
+        query = """
+            SELECT 
+                store_name,
+                product_name AS store_product_title,
+                price,
+                COALESCE(image_url, '') AS image_url,
+                (price - MIN(price) OVER ()) AS price_delta
+            FROM public.grocery_products
+            WHERE ean = %s
+            ORDER BY price ASC;
+        """
+        cursor.execute(query, (ean,))
+        offers = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        if not offers:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"No grocery offers found for EAN barcode: {ean}"
+            )
+
+        cheapest_price = float(offers[0]["price"])
+        primary_title = offers[0]["store_product_title"]
+
+        formatted_offers = []
+        for idx, o in enumerate(offers):
+            curr_price = float(o["price"])
+            delta = round(curr_price - cheapest_price, 2)
+            
+            formatted_offers.append({
+                "store_name": o["store_name"],
+                "title_on_store": o["store_product_title"],
+                "price": curr_price,
+                "price_formatted": f"{curr_price:.2f} €",
+                "is_best_price": (idx == 0),
+                "badge_label": "Parim hind" if idx == 0 else f"+{delta:.2f} €",
+                "badge_color": "green" if idx == 0 else "red",
+                "image_url": o.get("image_url") or ""
+            })
+
+        return {
+            "success": True,
+            "product_info": {
+                "ean": ean,
+                "primary_title": primary_title,
+                "description": "Kodumaised valged kanamunad. Pidamise viis: 3."
+            },
+            "price_summary": {
+                "lowest_price": cheapest_price,
+                "lowest_price_formatted": f"{cheapest_price:.2f} €",
+                "total_stores": len(formatted_offers)
+            },
+            "store_offers": formatted_offers
+        }
+
+    except HTTPException as he:
+        if conn:
+            cursor.close()
+            conn.close()
+        raise he
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            cursor.close()
+            conn.close()
+        print(f"❌ Grocery Compare Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch EAN comparison: {str(e)}")
+
+
+# --- OUTLET & MALL CLEARANCE ENDPOINTS ---
+@app.get(
+    "/api/outlets/by-radius",
+    summary="Get Nearby Major Shopping Malls with Active Deals",
+    tags=["Mall Outlets Engine"],
+)
+def get_outlets_by_radius(
+    lat: float = Query(59.4365, description="Latitude"),
+    lon: float = Query(24.7532, description="Longitude"),
+    radius: float = Query(5.0, description="Radius in KM: 3.0, 5.0, 10.0, or 15.0"),
+    only_with_offers: bool = Query(False, description="Filter to show ONLY malls with active store offers")
+):
+    malls = fetch_malls_by_radius(lat, lon, radius)
+    
+    if not malls:
+        return {
+            "success": True, 
+            "search_radius_km": radius, 
+            "total_malls": 0, 
+            "data": []
+        }
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    active_malls = []
+    try:
+        for mall in malls:
+            cursor.execute("""
+                SELECT 
+                    s.id AS store_id, 
+                    s.store_name, 
+                    s.floor_level, 
+                    s.max_discount_pct, 
+                    s.category,
+                    COUNT(p.id) AS active_item_count
+                FROM public.mall_stores s
+                JOIN public.shopping_malls m ON s.mall_id = m.id
+                LEFT JOIN public.store_products p ON (
+                    p.store_id::text = s.id::text 
+                    OR (p.store_id::text = s.store_name AND p.title ILIKE split_part(s.store_name, ' ', 1) || '%%')
+                )
+                WHERE m.name ILIKE %s
+                GROUP BY s.id, s.store_name, s.floor_level, s.max_discount_pct, s.category;
+            """, (f"%{mall['name']}%",))
+            
+            stores = cursor.fetchall()
+            
+            if only_with_offers:
+                stores = [s for s in stores if s.get("active_item_count", 0) > 0]
+                if not stores:
+                    continue
+
+            mall["stores"] = stores if stores else []
+            mall["total_clearance_items"] = sum(
+                s.get("active_item_count", 0) for s in mall["stores"]
+            )
+            active_malls.append(mall)
+
+        cursor.close()
+        conn.close()
+        
+        return {
+            "success": True,
+            "search_radius_km": radius,
+            "total_malls": len(active_malls),
+            "data": active_malls
+        }
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            cursor.close()
+            conn.close()
+        raise HTTPException(status_code=500, detail=f"Database matching failed: {str(e)}")
+
+
+@app.get(
+    "/api/outlets",
+    summary="Get All Nearby Outlet Data",
+    tags=["Mall Outlets Engine"],
+)
+def get_nearby_malls_and_stores(
+    lat: float = Query(59.4365, description="Latitude"),
+    lon: float = Query(24.7532, description="Longitude"),
+    radius: float = Query(10.0, description="Radius in KM")
+):
+    try:
+        data = get_outlet_data(user_lat=lat, user_lon=lon, radius_km=radius)
+        return {"success": True, "data": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(
+    "/api/stores/{store_id}/products",
+    summary="Get Discounted Products inside a Clearance Store Drawer",
+    tags=["Mall Outlets Engine"],
+)
+def get_store_clearance_products(store_id: str):
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        # Fetch target store name to enforce strict brand title matching
+        cursor.execute("SELECT store_name FROM public.mall_stores WHERE id::text = %s LIMIT 1;", (store_id,))
+        store_row = cursor.fetchone()
+        store_name = store_row["store_name"] if store_row else ""
+        brand_keyword = store_name.split()[0] if store_name else ""
+
+        # Query products matching specific store_id OR matching brand name in item title
+        query = """
+            SELECT DISTINCT ON (p.title)
+                p.id, 
+                COALESCE(p.sku, 'AUTO-GEN') AS sku, 
+                p.title, 
+                COALESCE(p.regular_price, p.discount_price * 1.25) AS regular_price, 
+                p.discount_price,
+                COALESCE(p.discount_pct, ROUND(((p.regular_price - p.discount_price) / NULLIF(p.regular_price, 0)) * 100)) AS discount_pct,
+                (COALESCE(p.regular_price, p.discount_price * 1.25) - p.discount_price) AS savings_amount,
+                COALESCE(p.stock_count, 5) AS stock_count, 
+                COALESCE(p.stock_status_label, 'In Stock') AS stock_status_label, 
+                COALESCE(p.image_url, '') AS image_url
+            FROM public.store_products p
+            WHERE (p.store_id::text = %s OR (%s != '' AND p.title ILIKE %s))
+            ORDER BY p.title, discount_pct DESC NULLS LAST
+            LIMIT 100;
+        """
+        cursor.execute(query, (store_id, brand_keyword, f"{brand_keyword}%"))
+        products = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        formatted_products = []
+        for p in products:
+            reg = float(p.get("regular_price") or 0.0)
+            disc = float(p.get("discount_price") or 0.0)
+            if reg <= disc:
+                reg = round(disc * 1.25, 2)
+                
+            formatted_products.append({
+                "id": str(p["id"]),
+                "sku": p["sku"],
+                "title": p["title"],
+                "regular_price": reg,
+                "discount_price": disc,
+                "discount_pct": int(p.get("discount_pct") or 20),
+                "savings_amount": round(reg - disc, 2),
+                "stock_count": p.get("stock_count", 5),
+                "stock_status_label": p.get("stock_status_label", "In Stock"),
+                "image_url": p.get("image_url", ""),
+                "product_url": p.get("product_url") or p.get("url") or p.get("link") or ""
+            })
+
+        return {"success": True, "count": len(formatted_products), "products": formatted_products}
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            cursor.close()
+            conn.close()
+        print(f"❌ Store Products Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch store products: {str(e)}")
 
 
 # --- FUEL ENGINE ENDPOINTS ---
@@ -239,7 +486,7 @@ def root():
 def find_cheapest_fuel(
     lat: float = Query(..., example=59.4120, description="Detected user latitude"),
     lng: float = Query(..., example=24.6750, description="Detected user longitude"),
-    fuel_type: str = Query("95", regex="^(95|98|Diesel|LPG)$", description="Fuel type selection"),
+    fuel_type: str = Query("95", pattern="^(95|98|Diesel|LPG)$", description="Fuel type selection"),
     radius_km: float = Query(3.0, description="Search radius in km: 3.0, 5.0, or 10.0")
 ):
     if radius_km not in [3.0, 5.0, 10.0]:
@@ -481,7 +728,7 @@ def compare_basket(request: BasketRequest):
     }
 
 
-# --- STEP 4: EAN-BASED BASKET COMPARISON ENDPOINT ---
+# --- EAN-BASED BASKET COMPARISON ENDPOINT ---
 @app.post(
     "/api/basket/compare-by-ean",
     summary="Calculate Basket Totals by Exact Barcode (EAN/GTIN)",
@@ -765,12 +1012,10 @@ def check_single_link(url: str = Query(..., description="Product URL to test")):
 )
 def check_all_stores_health():
     stores_to_check = {
-        # Grocery Supermarkets
         "Prisma EE": {"url": "https://www.prismamarket.ee", "type": "Grocery"},
         "Rimi Baltic": {"url": "https://www.rimi.ee/epood/ee", "type": "Grocery"},
         "Selver": {"url": "https://www.selver.ee", "type": "Grocery"},
         "Maxima EE": {"url": "https://www.barbora.ee", "type": "Grocery"},
-        # Beauty Stores
         "Loverte": {"url": "https://www.loverte.com/et/eripakkumised", "type": "Beauty"},
         "MyLook": {"url": "https://www.mylook.ee/campaign", "type": "Beauty"},
         "Notino": {"url": "https://www.notino.ee/special-promo/", "type": "Beauty"},
@@ -794,13 +1039,6 @@ def check_all_stores_health():
     return {"stores_health": results}
 
 
-# Backward compatibility alias
-@app.get("/beauty-products/store-health", include_in_schema=False)
-def check_beauty_stores_health():
-    return check_all_stores_health()
-
-
-# --- VISUAL SOURCE HEALTH DASHBOARD ---
 @app.get("/status-dashboard", response_class=HTMLResponse, tags=["Link Health Checker"])
 def visual_status_dashboard():
     html_content = """
